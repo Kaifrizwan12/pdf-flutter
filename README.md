@@ -1,5 +1,7 @@
 # PDF Editor Module
 
+> Note: This is the first version of the editor. Over time we will add more high-level features and improvements to make the experience seamless.
+
 An embeddable PDF document editor. The parent software passes document data in a defined JSON format — the user edits it in a full WYSIWYG canvas and downloads the result as a PDF.
 
 No template selection screen. No preset library. Just: **pass data → edit → download.**
