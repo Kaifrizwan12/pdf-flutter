@@ -42,8 +42,8 @@ function estimateTextHeight(el) {
   const fontSize = style.fontSize ?? 11;
   const lineHeight = style.lineHeight ?? 1.5;
   const lines = estimateWrappedLines(el.content, el.width, fontSize);
-  if (lines <= 1) return el.height;
-  return Math.max(el.height, lines * fontSize * lineHeight + 4);
+  const preferredHeight = lines * fontSize * lineHeight + 4;
+  return Math.max(el.height, preferredHeight);
 }
 
 function normalizeElementSize(el) {

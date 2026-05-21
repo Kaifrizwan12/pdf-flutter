@@ -67,6 +67,44 @@ function safePdfText(textValue) {
     .replace(/[^\n\r\t\x20-\x7e]/g, '?');
 }
 
+function isBoldFont(weightValue) {
+  const raw = Number(weightValue);
+  if (!Number.isFinite(raw)) return false;
+  if (raw >= 100) return raw >= 600; // CSS weight
+  return raw >= 5; // Flutter FontWeight index (w600+)
+}
+
+function parseTextAlign(alignValue) {
+  if (typeof alignValue === 'string') {
+    const normalized = alignValue.toLowerCase();
+    if (normalized === 'center') return 'center';
+    if (normalized === 'right' || normalized === 'end') return 'right';
+    if (normalized === 'justify') return 'justify';
+    return 'left';
+  }
+  const raw = Number(alignValue);
+  if (!Number.isFinite(raw)) return 'left';
+  if (raw === 1) return 'right';
+  if (raw === 2) return 'center';
+  if (raw === 3) return 'justify';
+  return 'left';
+}
+
+function resolveFont(style, fonts) {
+  const family = String(style?.fontFamily ?? '').toLowerCase();
+  const wantsMono = family.includes('mono');
+  const bold = isBoldFont(style?.fontWeight);
+
+  if (wantsMono) {
+    return fonts.RobotoMono ?? fonts.Courier ?? fonts.Helvetica;
+  }
+
+  if (bold) {
+    return fonts.RobotoBold ?? fonts.HelveticaBold ?? fonts.Helvetica;
+  }
+  return fonts.Roboto ?? fonts.Helvetica;
+}
+
 function wrapText(textValue, font, fontSize, maxWidth) {
   const text = safePdfText(textValue);
   const lines = [];
@@ -163,29 +201,45 @@ export async function generatePdf(elements, pageSize) {
 
 async function drawText(page, el, y, fonts) {
   const style = el.style ?? {};
-  const isBold = style.fontWeight > 400;
-  const font = isBold
-    ? (fonts.RobotoBold ?? fonts.HelveticaBold ?? fonts.Helvetica)
-    : (fonts.Roboto ?? fonts.Helvetica);
+  const font = resolveFont(style, fonts);
 
   const fontSize = style.fontSize ?? 12;
   const color = style.color ? argbToRgb(style.color) : rgb(0, 0, 0);
   const content = el.content ?? '';
+  const textAlign = parseTextAlign(style.textAlign);
+
+  if (style.backgroundColor) {
+    page.drawRectangle({
+      x: el.x,
+      y,
+      width: el.width,
+      height: el.height,
+      color: argbToRgb(style.backgroundColor),
+    });
+  }
 
   const lines = wrapText(content, font, fontSize, el.width);
   const lineH = fontSize * (style.lineHeight ?? 1.4);
-  let currentY = y + el.height - fontSize;
+  const blockHeight = lineH * lines.length;
+  let currentY = y + (el.height + blockHeight) / 2 - fontSize;
 
   for (const line of lines) {
     if (currentY < y) break;
+    const lineWidth = font.widthOfTextAtSize(line, fontSize);
+    let lineX = el.x;
+    if (textAlign === 'center') {
+      lineX = el.x + (el.width - lineWidth) / 2;
+    } else if (textAlign === 'right') {
+      lineX = el.x + el.width - lineWidth;
+    }
+    if (lineX < el.x) lineX = el.x;
     try {
       page.drawText(line, {
-        x: el.x,
+        x: lineX,
         y: currentY,
         size: fontSize,
         font,
         color,
-        maxWidth: el.width,
       });
     } catch { /* skip if font doesn't support the char */ }
     currentY -= lineH;
@@ -253,10 +307,10 @@ async function drawTable(page, el, topY, fonts, pageH) {
   const maxPad = rowHeight * 0.18;
   const cellPad = maxPad < 2
     ? Math.max(0.5, maxPad)
-    : Math.min(ts.cellPadding ?? 6, maxPad);
-  const headerFontSize = Math.max(6, Math.min(12, rowHeight - cellPad * 2));
-  const bodyFontSize = Math.max(5, Math.min(11, rowHeight - cellPad * 2));
-  const lineHeight = 1.28;
+    : Math.min(Math.max(ts.cellPadding ?? 6, 2), maxPad);
+  const headerFontSize = Math.min(12, Math.max(8, rowHeight - cellPad * 2));
+  const bodyFontSize = Math.min(11, Math.max(7, rowHeight - cellPad * 2));
+  const lineHeight = 1.0;
   const headerBg = ts.headerBg ? argbToRgb(ts.headerBg) : rgb(0.01, 0.52, 0.78);
   const borderColor = ts.borderColor ? argbToRgb(ts.borderColor) : rgb(0.8, 0.8, 0.8);
   const altColor = ts.alternateRowColor ? argbToRgb(ts.alternateRowColor) : rgb(0.97, 0.98, 0.98);
@@ -288,7 +342,7 @@ async function drawTable(page, el, topY, fonts, pageH) {
     const cx = el.x + col * colWidth;
     page.drawRectangle({
       x: cx, y: headerY, width: colWidth, height: headerHeight,
-      color: headerBg, borderColor, borderWidth: 0.5,
+      color: headerBg, borderColor, borderWidth: 0.75,
     });
     drawCellText(headers[col], cx, headerY, headerHeight, boldFont, headerFontSize, rgb(1, 1, 1));
   }
@@ -306,7 +360,7 @@ async function drawTable(page, el, topY, fonts, pageH) {
       page.drawRectangle({
         x: cx, y: rowY, width: colWidth, height: rowHeight,
         ...(rowBg ? { color: rowBg } : {}),
-        borderColor, borderWidth: 0.5,
+        borderColor, borderWidth: 0.75,
       });
       drawCellText(rowCells[col], cx, rowY, rowHeight, font, bodyFontSize, rgb(0.06, 0.09, 0.16));
     }
@@ -378,7 +432,7 @@ function drawDivider(page, el, y) {
   if (isH) {
     const midY = y + el.height / 2;
     if (el.dashStyle === 'dashed' || el.dashStyle === 'dotted') {
-      const dashLen = el.dashStyle === 'dashed' ? 6 : 2;
+      const dashLen = el.dashStyle === 'dashed' ? 8 : 2;
       const gap = 4;
       let x = el.x;
       while (x < el.x + el.width) {

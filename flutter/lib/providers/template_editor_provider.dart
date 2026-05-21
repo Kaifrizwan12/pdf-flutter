@@ -296,7 +296,6 @@ class TemplateEditorProvider extends ChangeNotifier {
   ) {
     if (before is TextElement && after is TextElement) {
       final visualLines = _estimateWrappedLines(after);
-      if (visualLines <= 1) return after;
       final preferredHeight =
           (visualLines * after.fontSize * after.lineHeight + 4)
               .clamp(20.0, double.infinity)
@@ -360,8 +359,7 @@ class TemplateEditorProvider extends ChangeNotifier {
 
       // Collect all elements whose Y is within 2px of this group's Y.
       final group = <TemplateElement>[];
-      while (i < candidates.length &&
-          (candidates[i].y - groupY).abs() < 2.0) {
+      while (i < candidates.length && (candidates[i].y - groupY).abs() < 2.0) {
         group.add(candidates[i]);
         i++;
       }
