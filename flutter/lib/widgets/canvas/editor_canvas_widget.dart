@@ -45,8 +45,7 @@ class _EditorCanvasWidgetState extends State<EditorCanvasWidget> {
     final contentW = pageW + padding * 2;
     final dx = ((viewSize.width - contentW) / 2).clamp(0.0, 400.0);
     if (dx > 4) {
-      _transformController.value =
-          Matrix4.identity()..translate(dx, 0.0);
+      _transformController.value = Matrix4.identity()..translate(dx, 0.0);
     }
   }
 
@@ -77,6 +76,7 @@ class _EditorCanvasWidgetState extends State<EditorCanvasWidget> {
                 maxScale: 5.0,
                 boundaryMargin: const EdgeInsets.all(1200),
                 constrained: false,
+                panEnabled: false,
                 // Keep wheel/trackpad gestures for panning long pages.
                 // Zoom is intentionally only via the controls to avoid
                 // accidental mouse-wheel zoom-outs.
@@ -123,7 +123,8 @@ class _EditorCanvasWidgetState extends State<EditorCanvasWidget> {
     final el = matches.first;
 
     const pagePadding = 48.0;
-    final scale = _transformController.value.getMaxScaleOnAxis()
+    final scale = _transformController.value
+        .getMaxScaleOnAxis()
         .clamp(0.2, 5.0)
         .toDouble();
     final scenePoint = Offset(

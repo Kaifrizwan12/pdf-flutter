@@ -34,6 +34,7 @@ class CanvasElementWidget extends StatefulWidget {
 class _CanvasElementWidgetState extends State<CanvasElementWidget> {
   Offset? _dragStart;
   double _startX = 0, _startY = 0;
+  bool _isDragging = false;
 
   TemplateEditorProvider get _provider =>
       context.read<TemplateEditorProvider>();
@@ -46,6 +47,7 @@ class _CanvasElementWidgetState extends State<CanvasElementWidget> {
     // Use ValueListenableBuilder for the drag position so only this widget
     // rebuilds during drag, not the entire canvas consumer.
     final dragNotifier = _provider.dragPositionFor(el.id);
+    final isDragging = _isDragging || dragNotifier != null;
 
     return ValueListenableBuilder<Offset>(
       valueListenable: dragNotifier ?? ValueNotifier(Offset(el.x, el.y)),
@@ -58,13 +60,18 @@ class _CanvasElementWidgetState extends State<CanvasElementWidget> {
           top: y,
           width: el.width,
           height: el.height,
-          child: _buildInteractiveLayer(el, x, y),
+          child: _buildInteractiveLayer(el, x, y, isDragging),
         );
       },
     );
   }
 
-  Widget _buildInteractiveLayer(TemplateElement el, double x, double y) {
+  Widget _buildInteractiveLayer(
+    TemplateElement el,
+    double x,
+    double y,
+    bool isDragging,
+  ) {
     return Selector<TemplateEditorProvider,
         ({bool selected, bool editingText})>(
       selector: (_, p) => (
@@ -74,6 +81,7 @@ class _CanvasElementWidgetState extends State<CanvasElementWidget> {
       builder: (context, state, _) {
         Widget content =
             _buildElementContent(el, state.editingText, state.selected);
+        content = _applyDragShadow(el, content, isDragging);
 
         if (el.locked) return content;
 
@@ -137,6 +145,46 @@ class _CanvasElementWidgetState extends State<CanvasElementWidget> {
     return ClipRect(child: inner);
   }
 
+  Widget _applyDragShadow(
+    TemplateElement el,
+    Widget child,
+    bool isDragging,
+  ) {
+    if (!isDragging) return child;
+
+    final borderRadius = switch (el) {
+      ImageElement ie => BorderRadius.circular(ie.borderRadius),
+      _ => BorderRadius.zero,
+    };
+
+    return Stack(
+      fit: StackFit.expand,
+      clipBehavior: Clip.none,
+      children: [
+        Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: borderRadius,
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x33000000),
+                  blurRadius: 12,
+                  offset: Offset(0, 8),
+                ),
+                BoxShadow(
+                  color: Color(0x1A000000),
+                  blurRadius: 2,
+                  offset: Offset(0, 1),
+                ),
+              ],
+            ),
+          ),
+        ),
+        child,
+      ],
+    );
+  }
+
   void _handleDoubleTap(TemplateElement el) {
     switch (el) {
       case TextElement _:
@@ -174,6 +222,7 @@ class _CanvasElementWidgetState extends State<CanvasElementWidget> {
       _provider.selectElement(el.id);
     }
     _provider.beginDrag(el.id);
+    setState(() => _isDragging = true);
   }
 
   void _onDragUpdate(DragUpdateDetails d, TemplateElement el) {
@@ -190,6 +239,8 @@ class _CanvasElementWidgetState extends State<CanvasElementWidget> {
   void _onDragEnd(TemplateElement el) {
     _dragStart = null;
     _provider.endDrag(el.id);
+    if (!mounted) return;
+    setState(() => _isDragging = false);
   }
 
   bool _isShiftHeld() => HardwareKeyboard.instance.isShiftPressed;
