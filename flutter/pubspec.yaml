@@ -1,0 +1,29 @@
+name: pdf_editor_module
+description: Embeddable PDF document editor widget. Parent software provides document data; user edits and downloads.
+publish_to: none
+version: 1.0.0
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  provider: ^6.1.2
+  http: ^1.2.0
+  file_picker: ^8.1.0
+  image_picker: ^1.1.0
+  google_fonts: ^6.2.1
+  path_provider: ^2.1.4
+  open_file: ^3.3.2
+  uuid: ^4.4.0
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

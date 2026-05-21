@@ -1,0 +1,20 @@
+# ── Node ──────────────────────────────────────────────────────────────────────
+node/node_modules/
+node/.env
+node/.env.*
+node/dist/
+
+# ── Flutter ───────────────────────────────────────────────────────────────────
+flutter/.dart_tool/
+flutter/.flutter-plugins
+flutter/.flutter-plugins-dependencies
+flutter/build/
+flutter/.packages
+flutter/pubspec.lock
+flutter/.idea/
+flutter/*.iml
+flutter/.vscode/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
