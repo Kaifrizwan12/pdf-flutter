@@ -32,9 +32,10 @@ class CanvasElementWidget extends StatefulWidget {
 }
 
 class _CanvasElementWidgetState extends State<CanvasElementWidget> {
-  Offset? _dragStart;
   double _startX = 0, _startY = 0;
   bool _isDragging = false;
+  Offset? _pointerDown;
+  int? _activePointer;
 
   TemplateEditorProvider get _provider =>
       context.read<TemplateEditorProvider>();
@@ -79,9 +80,11 @@ class _CanvasElementWidgetState extends State<CanvasElementWidget> {
         editingText: p.editingTextId == el.id,
       ),
       builder: (context, state, _) {
-        Widget content =
-            _buildElementContent(el, state.editingText, state.selected);
-        content = _applyDragShadow(el, content, isDragging);
+        final content = _applyDragShadow(
+          el,
+          _buildElementContent(el, state.editingText, state.selected),
+          isDragging,
+        );
 
         if (el.locked) return content;
 
@@ -93,18 +96,31 @@ class _CanvasElementWidgetState extends State<CanvasElementWidget> {
 
         final allowDoubleTap = el is! SignatureBlockElement;
 
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () =>
-              _provider.selectElement(el.id, addToSelection: _isShiftHeld()),
-          onDoubleTap: allowDoubleTap ? () => _handleDoubleTap(el) : null,
-          onPanStart: (d) => _onDragStart(d, el),
-          onPanUpdate: (d) => _onDragUpdate(d, el),
-          onPanEnd: (_) => _onDragEnd(el),
-          onLongPress: () => _showContextMenu(el),
-          // CanvasSelectionLayer in editor_canvas_widget.dart handles the
-          // selection border and resize handles for the whole canvas.
-          child: content,
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned.fill(child: content),
+            Positioned.fill(
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (event) => _onPointerDown(event, el),
+                onPointerMove: (event) => _onPointerMove(event, el),
+                onPointerUp: (event) => _onPointerUp(event, el),
+                onPointerCancel: (event) => _onPointerCancel(event, el),
+              ),
+            ),
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => _provider.selectElement(
+                  el.id,
+                  addToSelection: _isShiftHeld(),
+                ),
+                onDoubleTap: allowDoubleTap ? () => _handleDoubleTap(el) : null,
+                onLongPress: () => _showContextMenu(el),
+              ),
+            ),
+          ],
         );
       },
     );
@@ -213,22 +229,29 @@ class _CanvasElementWidgetState extends State<CanvasElementWidget> {
     _provider.updateElement(el.copyWith(src: src));
   }
 
-  void _onDragStart(DragStartDetails d, TemplateElement el) {
-    _dragStart = d.globalPosition;
+  void _onPointerDown(PointerDownEvent event, TemplateElement el) {
+    if (el.locked || _provider.editingTextId == el.id) return;
+    _activePointer = event.pointer;
+    _pointerDown = event.position;
     _startX = el.x;
     _startY = el.y;
-
-    if (!_provider.isSelected(el.id)) {
-      _provider.selectElement(el.id);
-    }
-    _provider.beginDrag(el.id);
-    setState(() => _isDragging = true);
   }
 
-  void _onDragUpdate(DragUpdateDetails d, TemplateElement el) {
-    if (_dragStart == null) return;
+  void _onPointerMove(PointerMoveEvent event, TemplateElement el) {
+    if (_activePointer != event.pointer || _pointerDown == null) return;
+
+    final delta = event.position - _pointerDown!;
+    if (!_isDragging && delta.distance < 4.0) return;
+
+    if (!_isDragging) {
+      if (!_provider.isSelected(el.id)) {
+        _provider.selectElement(el.id);
+      }
+      _provider.beginDrag(el.id);
+      if (mounted) setState(() => _isDragging = true);
+    }
+
     final scale = widget.transformController.value.getMaxScaleOnAxis();
-    final delta = d.globalPosition - _dragStart!;
     _provider.updateDrag(
       el.id,
       _startX + delta.dx / scale,
@@ -236,9 +259,22 @@ class _CanvasElementWidgetState extends State<CanvasElementWidget> {
     );
   }
 
-  void _onDragEnd(TemplateElement el) {
-    _dragStart = null;
-    _provider.endDrag(el.id);
+  void _onPointerUp(PointerUpEvent event, TemplateElement el) {
+    if (_activePointer != event.pointer) return;
+    _finishDrag(el);
+  }
+
+  void _onPointerCancel(PointerCancelEvent event, TemplateElement el) {
+    if (_activePointer != event.pointer) return;
+    _finishDrag(el);
+  }
+
+  void _finishDrag(TemplateElement el) {
+    _pointerDown = null;
+    _activePointer = null;
+    if (_isDragging) {
+      _provider.endDrag(el.id);
+    }
     if (!mounted) return;
     setState(() => _isDragging = false);
   }
