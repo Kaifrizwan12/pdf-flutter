@@ -1,10 +1,59 @@
 # PDF Editor Module
 
-> Note: This is the first version of the editor. Over time we will add more high-level features and improvements to make the experience seamless.
+An embeddable, fully-featured PDF document editor. The parent app passes a document as JSON — the user edits it on a WYSIWYG canvas and downloads the result as a PDF.
 
-An embeddable PDF document editor. The parent software passes document data in a defined JSON format — the user edits it in a full WYSIWYG canvas and downloads the result as a PDF.
+No template picker. No sign-up flow. Just: **pass data → edit → download.**
 
-No template selection screen. No preset library. Just: **pass data → edit → download.**
+---
+
+## What's in v1
+
+### Canvas & interactions
+- **Drag, resize, and reorder** any element — 8-point resize handles with minimum-size enforcement
+- **Multi-select** via Shift+Click or rubber-band drag
+- **Smart snap guides** — real-time guide lines that snap to page edges, page center, thirds, and other element edges/centers (8 px threshold)
+- **Alignment tools** — align left, right, top, bottom, center-H, center-V across a selection
+- **Z-order controls** — bring forward/back one step or jump to front/back; drag-to-reorder in the layers panel
+- **Undo / redo** — 50-state snapshot stack, Cmd/Ctrl+Z / Cmd/Ctrl+Shift+Z
+- **Full keyboard shortcuts** — copy, cut, paste, duplicate (Cmd+D), select-all, delete, arrow-nudge (1 px / 10 px with Shift), zoom in/out/reset
+
+### Element types (6)
+| Type | What it does |
+|---|---|
+| `text` | Inline-editable text — font family, size, weight, italic, color, alignment, line-height, letter-spacing, background color |
+| `image` | URL or base64 source — opacity, border radius, object-fit, drop shadow |
+| `logo` | Simplified image placeholder — double-tap to pick a file, opacity control |
+| `table` | Dynamic headers + rows — header/border/row colors, cell padding, alternating rows, inline cell editing |
+| `signature_block` | Two-row signature + date field — renders blank line when value is empty |
+| `divider` | Horizontal or vertical rule — solid, dashed, or dotted; color and thickness |
+
+### Editor chrome
+- **Layers panel** — sortable list with per-element visibility (👁) and lock (🔒) toggles; z-order drag handle; Add Element menu
+- **Properties panel** — position/size inputs + type-specific controls (color pickers, font selectors, dropdowns) that sync live with the canvas
+- **Toolbar** — undo/redo with count badges, live zoom readout, download PDF, print, full-screen preview
+- **Zoom** — 20 %–500 % via pinch, scroll wheel, or toolbar buttons
+- **Responsive layout** — three-column (layers + canvas + properties) on desktop; canvas-only on mobile
+
+### Export & PDF generation
+- One-click **Download PDF** and **Print** via the Node backend
+- Server-side auto-flow layout engine — estimates wrapped line heights and adjusts downstream elements to avoid overlap
+- Embeds Roboto (regular + bold) from Google Fonts; falls back to Helvetica on network failure
+- Renders all six element types faithfully, including dashed dividers, alternating table rows, and image opacity
+
+---
+
+## Roadmap
+
+> These are the next capabilities we plan to ship. The core editing experience is solid; everything below extends it.
+
+- **Multi-page documents** — templates that span more than one page, with automatic overflow detection and configurable page-break rules
+- **New element types** — shapes (rect, circle, line), QR codes, bar charts/pie charts, rich-text blocks (bold/italic/lists inline), and auto page-number stamps
+- **Canvas element toolbar** — drag-and-drop new elements directly onto the canvas from a floating toolbar, without touching JSON or the layers panel
+- **Preset template library** — built-in layout picker (invoice, proposal, contract, purchase order, etc.) so users can start from a polished base
+- **Per-field input locking** — parent app can freeze specific sidebar controls (e.g. prevent changing a font, a color, or a table column) so end-users edit only what they're allowed to
+- **Conditional visibility** — show or hide elements at render time based on data values passed in from the parent app (e.g. hide a discount row when discount is zero)
+- **Element grouping** — group elements together so they move, resize, and copy as a single unit
+- **Additional export formats** — download as PNG (page snapshot), SVG, or DOCX alongside PDF
 
 ---
 
