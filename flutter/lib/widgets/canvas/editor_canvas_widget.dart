@@ -163,7 +163,14 @@ class _EditorCanvasWidgetState extends State<EditorCanvasWidget> {
       // immediately deselect — see selection_handles_widget.dart.
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => provider.deselectAll(),
+        onTap: () {
+          // TapGestureRecognizer fires handleTapUp during its own dispose(),
+          // which runs inside finalizeTree while the framework is locked.
+          // Deferring to the next frame avoids the markNeedsBuild-while-locked crash.
+          if (!mounted) return;
+          final p = context.read<TemplateEditorProvider>();
+          WidgetsBinding.instance.addPostFrameCallback((_) => p.deselectAll());
+        },
         onPanStart: (d) => _onRubberStart(d.localPosition),
         onPanUpdate: (d) => _onRubberUpdate(d.localPosition),
         onPanEnd: (_) => _onRubberEnd(provider),

@@ -30,6 +30,7 @@ class _CanvasSelectionLayerState extends State<CanvasSelectionLayer> {
   double _origX = 0, _origY = 0, _origW = 0, _origH = 0;
   double _liveW = 0, _liveH = 0;
   bool _resizing = false;
+  String? _activeResizeId;
 
   @override
   Widget build(BuildContext context) {
@@ -48,6 +49,9 @@ class _CanvasSelectionLayerState extends State<CanvasSelectionLayer> {
         const dot = 10.0;
         const half = dot / 2;
 
+        // Handles are visually centered on each edge/corner. Resize math uses
+        // pointer deltas from pan start, so the -half paint offset does not
+        // shift the model-space resize origin.
         final handles = <HandlePosition, Offset>{
           HandlePosition.nw: Offset(el.x - half, el.y - half),
           HandlePosition.n: Offset(el.x + el.width / 2 - half, el.y - half),
@@ -93,6 +97,7 @@ class _CanvasSelectionLayerState extends State<CanvasSelectionLayer> {
                 left: entry.value.dx,
                 top: entry.value.dy,
                 child: _ResizeHandle(
+                  key: ValueKey('${el.id}:${entry.key.name}'),
                   position: entry.key,
                   transformController: widget.transformController,
                   onDragStart: () {
@@ -102,10 +107,15 @@ class _CanvasSelectionLayerState extends State<CanvasSelectionLayer> {
                     _origH = el.height;
                     _liveW = el.width;
                     _liveH = el.height;
+                    _activeResizeId = el.id;
                     setState(() => _resizing = true);
                     provider.beginResize(el.id);
                   },
                   onDragUpdate: (dx, dy, constrain) {
+                    if (_activeResizeId != el.id ||
+                        !provider.isSelected(el.id)) {
+                      return;
+                    }
                     provider.applyResize(el.id, _origX, _origY, _origW, _origH,
                         entry.key, dx, dy,
                         constrainAspect: constrain);
@@ -118,8 +128,10 @@ class _CanvasSelectionLayerState extends State<CanvasSelectionLayer> {
                     });
                   },
                   onDragEnd: () {
+                    final activeId = _activeResizeId;
+                    _activeResizeId = null;
                     setState(() => _resizing = false);
-                    provider.endResize(el.id);
+                    if (activeId == el.id) provider.endResize(el.id);
                   },
                 ),
               ),
@@ -164,6 +176,7 @@ class _ResizeHandle extends StatefulWidget {
   final VoidCallback onDragEnd;
 
   const _ResizeHandle({
+    super.key,
     required this.position,
     required this.transformController,
     required this.onDragStart,

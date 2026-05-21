@@ -1,4 +1,8 @@
 const FLOW_GAP = 8;
+const PAGE_MARGIN = 8;
+const DEFAULT_PAGE_HEIGHT = 842;
+const FLOW_LANE_TOLERANCE = 6;
+const FLOW_MIN_OVERLAP_RATIO = 0.25;
 
 function estimateWrappedLines(textValue, width, fontSize) {
   const text = String(textValue ?? '');
@@ -47,29 +51,90 @@ function normalizeElementSize(el) {
   return { ...el };
 }
 
-function applyAutoFlow(elements, changedId) {
+function rectOf(el) {
+  return {
+    left: Number(el.x ?? 0),
+    top: Number(el.y ?? 0),
+    right: Number(el.x ?? 0) + Number(el.width ?? 0),
+    bottom: Number(el.y ?? 0) + Number(el.height ?? 0),
+    width: Number(el.width ?? 0),
+  };
+}
+
+function horizontalOverlap(a, b) {
+  return Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+}
+
+function isInFlowLane(elementRect, anchorRect) {
+  const expandedAnchor = {
+    ...anchorRect,
+    left: anchorRect.left - FLOW_LANE_TOLERANCE,
+    right: anchorRect.right + FLOW_LANE_TOLERANCE,
+    width: anchorRect.width + FLOW_LANE_TOLERANCE * 2,
+  };
+  const overlap = horizontalOverlap(elementRect, expandedAnchor);
+  if (overlap <= 0) return false;
+
+  const narrowerWidth = Math.min(elementRect.width, expandedAnchor.width);
+  if (narrowerWidth <= 0) return false;
+  return overlap / narrowerWidth >= FLOW_MIN_OVERLAP_RATIO;
+}
+
+function applyAutoFlow(elements, changedId, oldRect, newRect) {
   let next = [...elements];
-  const changed = next.find(el => el.id === changedId);
+  let changed = next.find(el => el.id === changedId);
   if (!changed) return next;
 
-  const changedMidY = changed.y + changed.height / 2;
+  const deltaBottom = newRect.bottom - oldRect.bottom;
+  if (deltaBottom < -0.5) {
+    next = next.map(el => {
+      if (el.id === changedId || el.locked) return el;
+      if (!isInFlowLane(rectOf(el), oldRect)) return el;
+      if (el.y < oldRect.bottom - 1) return el;
+      return {
+        ...el,
+        y: Math.max(newRect.bottom + FLOW_GAP, el.y + deltaBottom),
+      };
+    });
+    changed = next.find(el => el.id === changedId);
+    if (!changed) return next;
+  }
+
+  const flowAnchor = rectOf(changed);
+  const minCandidateY = Math.min(oldRect.top, newRect.top);
   const candidates = next
     .filter(el =>
       el.id !== changedId &&
       !el.locked &&
-      el.y + el.height / 2 >= changedMidY - FLOW_GAP)
+      el.y >= minCandidateY - FLOW_GAP &&
+      isInFlowLane(rectOf(el), flowAnchor))
     .sort((a, b) => (a.y - b.y) || (a.x - b.x));
 
   let cursor = changed.y + changed.height + FLOW_GAP;
-  for (const el of candidates) {
-    if (el.y < cursor) {
-      const idx = next.findIndex(candidate => candidate.id === el.id);
-      if (idx !== -1) {
+  let i = 0;
+  while (i < candidates.length) {
+    const groupY = candidates[i].y;
+    const group = [];
+    while (i < candidates.length && Math.abs(candidates[i].y - groupY) < 2) {
+      group.push(candidates[i]);
+      i += 1;
+    }
+
+    if (groupY < cursor) {
+      let maxBottom = 0;
+      for (const groupEl of group) {
+        const idx = next.findIndex(candidate => candidate.id === groupEl.id);
+        if (idx === -1) continue;
         next[idx] = { ...next[idx], y: cursor };
-        cursor = next[idx].y + next[idx].height + FLOW_GAP;
+        maxBottom = Math.max(maxBottom, next[idx].y + next[idx].height);
       }
+      cursor = maxBottom + FLOW_GAP;
     } else {
-      cursor = el.y + el.height + FLOW_GAP;
+      const maxBottom = group.reduce(
+        (bottom, el) => Math.max(bottom, el.y + el.height),
+        0,
+      );
+      cursor = maxBottom + FLOW_GAP;
     }
   }
 
@@ -88,11 +153,23 @@ export function normalizeTemplateLayoutForRender(elements, pageSize) {
     if (after.height === before.height) continue;
     next = [...next];
     next[idx] = after;
-    next = applyAutoFlow(next, after.id);
+    next = applyAutoFlow(next, after.id, rectOf(before), rectOf(after));
   }
+
+  const contentHeight = next.reduce((maxHeight, el) => {
+    const bottom = Number(el.y ?? 0) + Number(el.height ?? 0) + PAGE_MARGIN;
+    return Math.max(maxHeight, bottom);
+  }, DEFAULT_PAGE_HEIGHT);
 
   return {
     elements: next,
-    pageSize: { ...pageSize, height: 842 },
+    pageSize: {
+      ...pageSize,
+      height: Math.max(
+        DEFAULT_PAGE_HEIGHT,
+        pageSize?.height ?? 0,
+        Math.ceil(contentHeight),
+      ),
+    },
   };
 }

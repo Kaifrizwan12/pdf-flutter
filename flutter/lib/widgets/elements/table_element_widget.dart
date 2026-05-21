@@ -25,6 +25,7 @@ class _TableElementWidgetState extends State<TableElementWidget> {
   ({int row, int col})? _editingCell;
   late List<TextEditingController> _controllers;
   FocusNode? _cellFocusNode;
+  final Set<FocusNode> _pendingFocusNodeDisposals = {};
 
   @override
   void initState() {
@@ -45,10 +46,12 @@ class _TableElementWidgetState extends State<TableElementWidget> {
 
   void _buildControllers() {
     final td = widget.element.tableData;
+    final colCount = td.headers.length;
     _controllers = [
       ...td.headers.map((h) => TextEditingController(text: h)),
       for (final row in td.rows)
-        ...row.map((cell) => TextEditingController(text: cell)),
+        for (var col = 0; col < colCount; col++)
+          TextEditingController(text: col < row.length ? row[col] : ''),
     ];
   }
 
@@ -57,7 +60,11 @@ class _TableElementWidgetState extends State<TableElementWidget> {
     for (final c in _controllers) {
       c.dispose();
     }
-    _disposeCellFocusNode();
+    _disposeCellFocusNode(defer: false);
+    for (final node in _pendingFocusNodeDisposals) {
+      node.dispose();
+    }
+    _pendingFocusNodeDisposals.clear();
     super.dispose();
   }
 
@@ -65,11 +72,16 @@ class _TableElementWidgetState extends State<TableElementWidget> {
     final td = widget.element.tableData;
     TableData updated;
     if (row == -1) {
+      if (col < 0 || col >= td.headers.length) return;
       final headers = [...td.headers];
       headers[col] = value;
       updated = td.copyWith(headers: headers);
     } else {
+      if (row < 0 || row >= td.rows.length || col < 0) return;
       final rows = td.rows.map((r) => [...r]).toList();
+      while (rows[row].length <= col) {
+        rows[row].add('');
+      }
       rows[row][col] = value;
       updated = td.copyWith(rows: rows);
     }
@@ -103,25 +115,44 @@ class _TableElementWidgetState extends State<TableElementWidget> {
     final active = _editingCell;
     if (active == null) return;
     final controller = _controllerFor(active.row, active.col);
+    if (controller == null) return;
     _commitCell(active.row, active.col, controller.text);
   }
 
-  void _disposeCellFocusNode() {
+  void _disposeCellFocusNode({bool defer = true}) {
     final node = _cellFocusNode;
     _cellFocusNode = null;
     // Defer dispose: calling dispose() inside a FocusNode listener crashes
     // because the node is mid-notification when the listener fires _commitCell.
-    if (node != null) Future.microtask(node.dispose);
+    if (node == null) return;
+    if (!defer) {
+      _pendingFocusNodeDisposals.remove(node);
+      node.dispose();
+      return;
+    }
+    _pendingFocusNodeDisposals.add(node);
+    Future.microtask(() {
+      if (!_pendingFocusNodeDisposals.remove(node)) return;
+      node.dispose();
+    });
   }
 
   void _selectTableElement() {
     widget.provider?.selectElement(widget.element.id);
   }
 
-  TextEditingController _controllerFor(int row, int col) {
+  TextEditingController? _controllerFor(int row, int col) {
     final colCount = widget.element.tableData.headers.length;
     final index = row == -1 ? col : colCount + row * colCount + col;
+    if (index < 0 || index >= _controllers.length) return null;
     return _controllers[index];
+  }
+
+  String _cellValue(int row, int col) {
+    final td = widget.element.tableData;
+    if (row == -1) return td.headers[col];
+    final cells = td.rows[row];
+    return col < cells.length ? cells[col] : '';
   }
 
   @override
@@ -176,10 +207,10 @@ class _TableElementWidgetState extends State<TableElementWidget> {
               children: List.generate(colCount, (col) {
                 final ctrlIdx = colCount + row * colCount + col;
                 return _cell(
-                  text: td.rows[row][col],
+                  text: _cellValue(row, col),
                   controller: ctrlIdx < _controllers.length
                       ? _controllers[ctrlIdx]
-                      : TextEditingController(),
+                      : null,
                   row: row,
                   col: col,
                   backgroundColor: ts.alternateRows && row.isOdd
@@ -203,7 +234,7 @@ class _TableElementWidgetState extends State<TableElementWidget> {
 
   Widget _cell({
     required String text,
-    required TextEditingController controller,
+    required TextEditingController? controller,
     required int row,
     required int col,
     required TextStyle style,
@@ -216,6 +247,10 @@ class _TableElementWidgetState extends State<TableElementWidget> {
     final isActive = _editingCell != null &&
         _editingCell!.row == row &&
         _editingCell!.col == col;
+
+    if (isActive && controller == null) {
+      return const Expanded(child: SizedBox.shrink());
+    }
 
     return Expanded(
       child: GestureDetector(
@@ -230,7 +265,7 @@ class _TableElementWidgetState extends State<TableElementWidget> {
             padding: EdgeInsets.all(padding),
             child: isActive
                 ? TextField(
-                    controller: controller,
+                    controller: controller!,
                     focusNode: _cellFocusNode,
                     keyboardType: TextInputType.multiline,
                     textInputAction: TextInputAction.newline,

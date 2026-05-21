@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:ui' show Offset, Rect;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart'
+    show TextDirection, TextPainter, TextSpan, TextStyle;
 
 import '../models/pdf_document_data.dart';
 import '../models/template_element_model.dart';
@@ -23,6 +25,8 @@ enum SaveState { idle, saving, saved, error }
 class TemplateEditorProvider extends ChangeNotifier {
   static const double _flowGap = 8.0;
   static const double _pageMargin = 8.0;
+  static const double _flowLaneTolerance = 6.0;
+  static const double _flowMinOverlapRatio = 0.25;
 
   final TemplateRepository _repo;
   final ClipboardService _clipboard;
@@ -58,11 +62,21 @@ class TemplateEditorProvider extends ChangeNotifier {
   // ── Selection ──────────────────────────────────────────────────────────
 
   Set<String> _selectedIds = {};
-  Set<String> get selectedIds => Set.unmodifiable(_selectedIds);
+  Set<String> get selectedIds {
+    _pruneSelection();
+    return Set.unmodifiable(_selectedIds);
+  }
 
   bool isSelected(String id) => _selectedIds.contains(id);
-  bool get hasSelection => _selectedIds.isNotEmpty;
-  bool get hasMultiSelection => _selectedIds.length > 1;
+  bool get hasSelection {
+    _pruneSelection();
+    return _selectedIds.isNotEmpty;
+  }
+
+  bool get hasMultiSelection {
+    _pruneSelection();
+    return _selectedIds.length > 1;
+  }
 
   String? _focusRequestId;
   String? get focusRequestId => _focusRequestId;
@@ -71,11 +85,13 @@ class TemplateEditorProvider extends ChangeNotifier {
   int get focusRequestVersion => _focusRequestVersion;
 
   TemplateElement? get primarySelected {
+    _pruneSelection();
     if (_selectedIds.isEmpty) return null;
     final id = _selectedIds.first;
     try {
       return _elements.firstWhere((e) => e.id == id);
     } catch (_) {
+      _selectedIds = {..._selectedIds}..remove(id);
       return null;
     }
   }
@@ -103,8 +119,8 @@ class TemplateEditorProvider extends ChangeNotifier {
   // ── Undo / Redo ────────────────────────────────────────────────────────
 
   static const int _maxUndo = 50;
-  final List<List<TemplateElement>> _undoStack = [];
-  final List<List<TemplateElement>> _redoStack = [];
+  final List<_EditorSnapshot> _undoStack = [];
+  final List<_EditorSnapshot> _redoStack = [];
 
   int get undoCount => _undoStack.length;
   int get redoCount => _redoStack.length;
@@ -159,6 +175,7 @@ class TemplateEditorProvider extends ChangeNotifier {
         pageSize: PageSize(width: t.pageSize.width, height: 842),
       );
       _elements = _normalizeLoadedElements(t.elements);
+      _syncPageHeightToContent();
       debugPrint(
         '[TemplateEditor] canvas elements after copy=${_elements.length}',
       );
@@ -192,6 +209,7 @@ class TemplateEditorProvider extends ChangeNotifier {
       pageSize: PageSize(width: model.pageSize.width, height: 842),
     );
     _elements = _normalizeLoadedElements(model.elements);
+    _syncPageHeightToContent();
     _isLoaded = true;
     notifyListeners();
   }
@@ -199,26 +217,40 @@ class TemplateEditorProvider extends ChangeNotifier {
   // ── Undo / Redo ─────────────────────────────────────────────────────────
 
   void _pushUndo() {
-    _undoStack.add(_deepCopy(_elements));
+    _undoStack.add(_snapshot());
     if (_undoStack.length > _maxUndo) _undoStack.removeAt(0);
     _redoStack.clear();
   }
 
+  _EditorSnapshot _snapshot() => _EditorSnapshot(
+        elements: _deepCopy(_elements),
+        selectedIds: {..._selectedIds},
+        editingTextId: _editingTextId,
+      );
+
+  void _restoreSnapshot(_EditorSnapshot snapshot) {
+    _elements = _deepCopy(snapshot.elements);
+    _selectedIds = {...snapshot.selectedIds};
+    _editingTextId = snapshot.editingTextId;
+    _pruneSelection();
+    if (_editingTextId != null &&
+        !_elements.any((element) => element.id == _editingTextId)) {
+      _editingTextId = null;
+    }
+  }
+
   void undo() {
     if (_undoStack.isEmpty) return;
-    _redoStack.add(_deepCopy(_elements));
-    _elements = _undoStack.removeLast();
-    _selectedIds = {};
-    _editingTextId = null;
+    _redoStack.add(_snapshot());
+    _restoreSnapshot(_undoStack.removeLast());
     _scheduleAutoSave();
     notifyListeners();
   }
 
   void redo() {
     if (_redoStack.isEmpty) return;
-    _undoStack.add(_deepCopy(_elements));
-    _elements = _redoStack.removeLast();
-    _selectedIds = {};
+    _undoStack.add(_snapshot());
+    _restoreSnapshot(_redoStack.removeLast());
     _scheduleAutoSave();
     notifyListeners();
   }
@@ -226,27 +258,44 @@ class TemplateEditorProvider extends ChangeNotifier {
   List<TemplateElement> _deepCopy(List<TemplateElement> src) =>
       src.map((e) => e.deepCopy()).toList();
 
-  bool _layoutChanged(TemplateElement before, TemplateElement after) =>
+  bool _rectChanged(TemplateElement before, TemplateElement after) =>
       before.x != after.x ||
       before.y != after.y ||
       before.width != after.width ||
-      before.height != after.height ||
-      (before is TableElement &&
-          after is TableElement &&
-          (before.tableData.rows.length != after.tableData.rows.length ||
-              before.tableData.headers.length !=
-                  after.tableData.headers.length));
+      before.height != after.height;
+
+  bool _manualGeometryChanged(
+    TemplateElement before,
+    TemplateElement requested,
+  ) =>
+      before.x != requested.x ||
+      before.y != requested.y ||
+      before.width != requested.width ||
+      before.height != requested.height;
+
+  bool _verticalGeometryChanged(
+    TemplateElement before,
+    TemplateElement requested,
+  ) =>
+      before.y != requested.y || before.height != requested.height;
+
+  bool _shouldAutoFlowUpdate(
+    TemplateElement before,
+    TemplateElement requested,
+    TemplateElement normalized,
+  ) {
+    if (_manualGeometryChanged(before, requested)) {
+      return _verticalGeometryChanged(before, requested);
+    }
+    return _rectChanged(before, normalized);
+  }
 
   TemplateElement _normalizeElementSize(
     TemplateElement before,
     TemplateElement after,
   ) {
     if (before is TextElement && after is TextElement) {
-      final visualLines = _estimateWrappedLines(
-        after.content,
-        after.width,
-        after.fontSize,
-      );
+      final visualLines = _estimateWrappedLines(after);
       if (visualLines <= 1) return after;
       final preferredHeight =
           (visualLines * after.fontSize * after.lineHeight + 4)
@@ -276,20 +325,24 @@ class TemplateEditorProvider extends ChangeNotifier {
       final pullUpBy = deltaBottom;
       next = next.map((el) {
         if (el.id == changedId || el.locked) return el;
+        if (!_isInFlowLane(el.rect, oldRect)) return el;
         if (el.y < oldRect.bottom - 1) return el;
-        final y =
-            (el.y + pullUpBy).clamp(newRect.bottom + _flowGap, el.y).toDouble();
+        final targetY = el.y + pullUpBy;
+        final minY = newRect.bottom + _flowGap;
+        final y = targetY < minY ? minY : targetY;
         return _moveElement(el, el.x, y);
       }).toList();
       changed = next.firstWhere((e) => e.id == changedId);
     }
 
-    final changedMidY = changed.y + changed.height / 2;
+    final flowAnchor = changed.rect;
+    final minCandidateY = oldRect.top < newRect.top ? oldRect.top : newRect.top;
     final candidates = next
         .where((el) =>
             el.id != changedId &&
             !el.locked &&
-            el.y + el.height / 2 >= changedMidY - _flowGap)
+            el.y >= minCandidateY - _flowGap &&
+            _isInFlowLane(el.rect, flowAnchor))
         .toList()
       ..sort((a, b) {
         final byY = a.y.compareTo(b.y);
@@ -340,6 +393,30 @@ class TemplateEditorProvider extends ChangeNotifier {
     return next;
   }
 
+  bool _isInFlowLane(Rect elementRect, Rect anchorRect) {
+    final expandedAnchor = Rect.fromLTRB(
+      anchorRect.left - _flowLaneTolerance,
+      anchorRect.top,
+      anchorRect.right + _flowLaneTolerance,
+      anchorRect.bottom,
+    );
+    final overlap = _horizontalOverlap(elementRect, expandedAnchor);
+    if (overlap <= 0) return false;
+
+    final narrowerWidth = elementRect.width < expandedAnchor.width
+        ? elementRect.width
+        : expandedAnchor.width;
+    if (narrowerWidth <= 0) return false;
+    return overlap / narrowerWidth >= _flowMinOverlapRatio;
+  }
+
+  double _horizontalOverlap(Rect a, Rect b) {
+    final left = a.left > b.left ? a.left : b.left;
+    final right = a.right < b.right ? a.right : b.right;
+    final overlap = right - left;
+    return overlap > 0 ? overlap : 0;
+  }
+
   List<TemplateElement> _normalizeLoadedElements(
     List<TemplateElement> elements,
   ) {
@@ -355,7 +432,7 @@ class TemplateEditorProvider extends ChangeNotifier {
       if (idx == -1) continue;
       final before = next[idx];
       final normalized = _normalizeElementSize(before, before);
-      if (!_layoutChanged(before, normalized)) continue;
+      if (!_rectChanged(before, normalized)) continue;
       next = [...next]..[idx] = normalized;
       next = _applyAutoFlow(next, normalized.id, before.rect, normalized.rect);
     }
@@ -363,49 +440,55 @@ class TemplateEditorProvider extends ChangeNotifier {
     return next;
   }
 
-  int _estimateWrappedLines(String text, double width, double fontSize) {
-    final safeWidth = width <= 0 ? 1.0 : width;
-    final charsPerLine = (safeWidth / (fontSize * 0.52)).floor();
-    final safeCharsPerLine = charsPerLine < 1 ? 1 : charsPerLine;
-    var lines = 0;
-    for (final paragraph in text.split('\n')) {
-      final words = paragraph.trim().split(RegExp(r'\s+'));
-      var current = 0;
-      if (words.length == 1 && words.first.isEmpty) {
-        lines++;
-        continue;
-      }
-      for (final word in words) {
-        final wordLength = word.length;
-        if (current == 0) {
-          current = wordLength;
-          lines += (wordLength / safeCharsPerLine).floor();
-          current = wordLength % safeCharsPerLine;
-        } else if (current + 1 + wordLength <= safeCharsPerLine) {
-          current += 1 + wordLength;
-        } else {
-          lines++;
-          current = wordLength;
-          lines += (wordLength / safeCharsPerLine).floor();
-          current = wordLength % safeCharsPerLine;
-        }
-      }
-      if (current > 0) lines++;
-    }
-    return lines < 1 ? 1 : lines;
+  int _estimateWrappedLines(TextElement element) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: element.content,
+        style: TextStyle(
+          fontFamily: element.fontFamily,
+          fontSize: element.fontSize,
+          fontWeight: element.fontWeight,
+          fontStyle: element.fontStyle,
+          height: element.lineHeight,
+          letterSpacing: element.letterSpacing,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: element.width <= 0 ? 1.0 : element.width);
+
+    final lineCount = painter.computeLineMetrics().length;
+    painter.dispose();
+    return lineCount < 1 ? 1 : lineCount;
   }
 
   void _syncPageHeightToContent() {
     final template = _template;
     if (template == null) return;
-    if (template.pageSize.height != 842) {
+    final contentBottom = _elements.fold<double>(
+      842,
+      (maxBottom, element) {
+        final bottom = element.y + element.height + _pageMargin;
+        return bottom > maxBottom ? bottom : maxBottom;
+      },
+    );
+    final nextHeight = contentBottom.ceilToDouble();
+    if ((template.pageSize.height - nextHeight).abs() > 0.5) {
       _template = template.copyWith(
         pageSize: PageSize(
           width: template.pageSize.width,
-          height: 842,
+          height: nextHeight,
         ),
       );
     }
+  }
+
+  bool _pruneSelection() {
+    if (_selectedIds.isEmpty) return false;
+    final liveIds = _elements.map((element) => element.id).toSet();
+    final next = _selectedIds.where(liveIds.contains).toSet();
+    if (next.length == _selectedIds.length) return false;
+    _selectedIds = next;
+    return true;
   }
 
   // ── Selection ──────────────────────────────────────────────────────────
@@ -415,6 +498,14 @@ class TemplateEditorProvider extends ChangeNotifier {
     bool addToSelection = false,
     bool focus = false,
   }) {
+    _pruneSelection();
+    if (!_elements.any((element) => element.id == id)) {
+      if (_selectedIds.isEmpty && _editingTextId == null) return;
+      _selectedIds = {};
+      _editingTextId = null;
+      notifyListeners();
+      return;
+    }
     if (addToSelection) {
       _selectedIds = {..._selectedIds, id};
     } else {
@@ -451,6 +542,10 @@ class TemplateEditorProvider extends ChangeNotifier {
   }
 
   void beginInlineEdit(String id, {bool focus = false}) {
+    if (!_elements.any((element) => element.id == id)) {
+      _pruneSelection();
+      return;
+    }
     _selectedIds = {id};
     _editingTextId = id;
     if (focus) {
@@ -468,10 +563,14 @@ class TemplateEditorProvider extends ChangeNotifier {
 
   // ── Text edit ──────────────────────────────────────────────────────────
 
-  /// Called on double-tap of a text/logo element. Captures undo snapshot now;
-  /// the final committed text is applied in [commitTextEdit].
+  /// Called on double-tap of a text/logo element. The undo snapshot is captured
+  /// when text is committed so merely entering edit mode does not invalidate
+  /// redo history or create an empty undo step.
   void beginTextEdit(String id) {
-    _pushUndo(); // Snapshot before the edit session
+    if (!_elements.any((element) => element.id == id)) {
+      _pruneSelection();
+      return;
+    }
     _selectedIds = {id};
     _editingTextId = id;
     notifyListeners();
@@ -486,10 +585,15 @@ class TemplateEditorProvider extends ChangeNotifier {
     }
     final el = _elements[idx];
     if (el is TextElement) {
+      if (el.content == newContent) {
+        notifyListeners();
+        return;
+      }
+      _pushUndo();
       final updated =
           _normalizeElementSize(el, el.copyWith(content: newContent));
       final next = [..._elements]..[idx] = updated;
-      _elements = _layoutChanged(el, updated)
+      _elements = _rectChanged(el, updated)
           ? _applyAutoFlow(next, id, el.rect, updated.rect)
           : next;
       _syncPageHeightToContent();
@@ -533,10 +637,12 @@ class TemplateEditorProvider extends ChangeNotifier {
   // ── Delete ─────────────────────────────────────────────────────────────
 
   void deleteSelected() {
+    _pruneSelection();
     if (_selectedIds.isEmpty) return;
     _pushUndo();
     _elements = _elements.where((e) => !_selectedIds.contains(e.id)).toList();
     _selectedIds = {};
+    _syncPageHeightToContent();
     _scheduleAutoSave();
     notifyListeners();
   }
@@ -547,8 +653,21 @@ class TemplateEditorProvider extends ChangeNotifier {
   /// Creates a ValueNotifier for the dragged element — canvas updates
   /// subscribe to this directly, bypassing notifyListeners() during drag.
   void beginDrag(String id) {
-    _suspendAutoSave();
-    final el = _elements.firstWhere((e) => e.id == id);
+    final idx = _elements.indexWhere((e) => e.id == id);
+    if (idx == -1) {
+      _pruneSelection();
+      return;
+    }
+
+    final previousDrag = _dragPositions.remove(id);
+    if (previousDrag == null) {
+      _pushUndo();
+      _suspendAutoSave();
+    } else {
+      previousDrag.dispose();
+    }
+
+    final el = _elements[idx];
     _dragPositions[id] = ValueNotifier(Offset(el.x, el.y));
     final guides = CanvasMath.computeGuides(
       _elements,
@@ -565,7 +684,18 @@ class TemplateEditorProvider extends ChangeNotifier {
     final notifier = _dragPositions[id];
     if (notifier == null) return;
 
-    final el = _elements.firstWhere((e) => e.id == id);
+    final idx = _elements.indexWhere((e) => e.id == id);
+    if (idx == -1) {
+      _dragPositions.remove(id);
+      notifier.dispose();
+      snapGuides.value = const [];
+      _resumeAutoSave();
+      _pruneSelection();
+      notifyListeners();
+      return;
+    }
+
+    final el = _elements[idx];
     final guides = snapGuides.value;
     final (sx, sy) =
         CanvasMath.snapElementPosition(x, y, el.width, el.height, guides);
@@ -579,17 +709,23 @@ class TemplateEditorProvider extends ChangeNotifier {
     if (notifier == null) return;
     snapGuides.value = const [];
 
-    _pushUndo();
     final pos = notifier.value;
     notifier.dispose();
 
     final idx = _elements.indexWhere((e) => e.id == id);
-    if (idx == -1) return;
+    if (idx == -1) {
+      _resumeAutoSave();
+      _pruneSelection();
+      notifyListeners();
+      return;
+    }
 
     final before = _elements[idx];
     final updated = _moveElement(before, pos.dx, pos.dy);
     final next = [..._elements]..[idx] = updated;
-    _elements = _applyAutoFlow(next, id, before.rect, updated.rect);
+    _elements = _verticalGeometryChanged(before, updated)
+        ? _applyAutoFlow(next, id, before.rect, updated.rect)
+        : next;
     _syncPageHeightToContent();
     _resumeAutoSave();
     _scheduleAutoSave();
@@ -609,6 +745,7 @@ class TemplateEditorProvider extends ChangeNotifier {
   // ── Nudge (arrow keys) ────────────────────────────────────────────────
 
   void nudge(double dx, double dy) {
+    _pruneSelection();
     if (_selectedIds.isEmpty) return;
     _pushUndo();
     _elements = _elements.map((e) {
@@ -623,6 +760,10 @@ class TemplateEditorProvider extends ChangeNotifier {
   // ── Resize ─────────────────────────────────────────────────────────────
 
   void beginResize(String id) {
+    if (!_elements.any((element) => element.id == id)) {
+      _pruneSelection();
+      return;
+    }
     _pushUndo();
     _suspendAutoSave();
   }
@@ -652,7 +793,9 @@ class TemplateEditorProvider extends ChangeNotifier {
     final before = _elements[idx];
     final updated = _resizeElement(before, r.x, r.y, r.width, r.height);
     final next = [..._elements]..[idx] = updated;
-    _elements = _applyAutoFlow(next, id, before.rect, updated.rect);
+    _elements = _verticalGeometryChanged(before, updated)
+        ? _applyAutoFlow(next, id, before.rect, updated.rect)
+        : next;
     _syncPageHeightToContent();
     _scheduleAutoSave();
     notifyListeners();
@@ -690,20 +833,33 @@ class TemplateEditorProvider extends ChangeNotifier {
   void sendBackward(String id) => _shiftZ(id, -1);
 
   void bringToFront(String id) {
+    if (_elements.isEmpty || !_elements.any((element) => element.id == id)) {
+      _pruneSelection();
+      return;
+    }
     _pushUndo();
     final maxZ = _elements.map((e) => e.zIndex).reduce((a, b) => a > b ? a : b);
     _updateZ(id, maxZ + 1);
   }
 
   void sendToBack(String id) {
+    if (_elements.isEmpty || !_elements.any((element) => element.id == id)) {
+      _pruneSelection();
+      return;
+    }
     _pushUndo();
     final minZ = _elements.map((e) => e.zIndex).reduce((a, b) => a < b ? a : b);
     _updateZ(id, minZ - 1);
   }
 
   void _shiftZ(String id, int delta) {
+    final idx = _elements.indexWhere((e) => e.id == id);
+    if (idx == -1) {
+      _pruneSelection();
+      return;
+    }
     _pushUndo();
-    final el = _elements.firstWhere((e) => e.id == id);
+    final el = _elements[idx];
     _updateZ(id, el.zIndex + delta);
   }
 
@@ -726,7 +882,10 @@ class TemplateEditorProvider extends ChangeNotifier {
 
   // ── Copy / Paste / Duplicate ──────────────────────────────────────────
 
-  void copySelected() => _clipboard.copy(selectedElements);
+  void copySelected() {
+    _pruneSelection();
+    _clipboard.copy(selectedElements);
+  }
 
   void cutSelected() {
     _clipboard.copy(selectedElements);
@@ -734,7 +893,11 @@ class TemplateEditorProvider extends ChangeNotifier {
   }
 
   void paste() {
-    final pasted = _clipboard.paste();
+    final pasted = _clipboard.paste(
+      pageWidth: _template?.pageSize.width ?? 595,
+      pageHeight: _template?.pageSize.height ?? 842,
+      pageMargin: _pageMargin,
+    );
     if (pasted.isEmpty) return;
     _pushUndo();
     final maxZ = _elements.isEmpty
@@ -747,6 +910,7 @@ class TemplateEditorProvider extends ChangeNotifier {
         .toList();
     _elements = [..._elements, ...withZ];
     _selectedIds = withZ.map((e) => e.id).toSet();
+    _syncPageHeightToContent();
     _scheduleAutoSave();
     notifyListeners();
   }
@@ -761,13 +925,16 @@ class TemplateEditorProvider extends ChangeNotifier {
 
   /// Generic element update — replaces the element with the provided instance.
   void updateElement(TemplateElement updated) {
-    _pushUndo();
     final idx = _elements.indexWhere((e) => e.id == updated.id);
-    if (idx == -1) return;
+    if (idx == -1) {
+      _pruneSelection();
+      return;
+    }
+    _pushUndo();
     final before = _elements[idx];
     final normalized = _normalizeElementSize(before, updated);
     final next = [..._elements]..[idx] = normalized;
-    _elements = _layoutChanged(before, normalized)
+    _elements = _shouldAutoFlowUpdate(before, updated, normalized)
         ? _applyAutoFlow(next, normalized.id, before.rect, normalized.rect)
         : next;
     _syncPageHeightToContent();
@@ -818,6 +985,7 @@ class TemplateEditorProvider extends ChangeNotifier {
   // ── Alignment ─────────────────────────────────────────────────────────
 
   void alignSelected(String direction) {
+    _pruneSelection();
     if (_selectedIds.length < 2) return;
     _pushUndo();
     final sel = selectedElements;
@@ -950,4 +1118,16 @@ class TemplateEditorProvider extends ChangeNotifier {
 bool setEquals<T>(Set<T> a, Set<T> b) {
   if (a.length != b.length) return false;
   return a.containsAll(b);
+}
+
+class _EditorSnapshot {
+  final List<TemplateElement> elements;
+  final Set<String> selectedIds;
+  final String? editingTextId;
+
+  const _EditorSnapshot({
+    required this.elements,
+    required this.selectedIds,
+    required this.editingTextId,
+  });
 }

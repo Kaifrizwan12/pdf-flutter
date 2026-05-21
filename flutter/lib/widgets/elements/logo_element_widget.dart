@@ -42,8 +42,15 @@ class LogoElementWidget extends StatelessWidget {
         fit: BoxFit.contain,
         width: el.width,
         height: el.height,
-        errorBuilder: (_, __, ___) => const Icon(Icons.business_outlined,
-            color: AppColors.charcoal300),
+        errorBuilder: (_, __, ___) => const SizedBox.expand(
+          child: Center(
+            child: Icon(
+              Icons.business_outlined,
+              color: AppColors.charcoal300,
+              size: 24,
+            ),
+          ),
+        ),
       );
     }
 

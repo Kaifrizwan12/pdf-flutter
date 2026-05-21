@@ -662,29 +662,29 @@ class TableElement extends TemplateElement {
         'tablestyle': tableStyle.toJson(),
       };
 
-  factory TableElement.fromJson(Map<String, dynamic> json) => TableElement(
-        id: _asString(json['id']),
-        x: _asDouble(json['x']),
-        y: _asDouble(json['y']),
-        width: _asDouble(json['width']),
-        height: _asDouble(json['height']),
-        zIndex: _asInt(json['zIndex']),
-        locked: _asBool(json['locked']),
-        visible: _asBool(json['visible'], true),
-        tableData: TableData.fromJson(
-            _asMap(json['tableData']).isNotEmpty
-                ? _asMap(json['tableData'])
-                : _asMap(json['table_data'])),
-        tableStyle: (_asMap(json['tablestyle']).isNotEmpty
-                ? _asMap(json['tablestyle'])
-                : _asMap(json['tableStyle']))
-            .isNotEmpty
-            ? TableStyleData.fromJson(
-                _asMap(json['tablestyle']).isNotEmpty
-                    ? _asMap(json['tablestyle'])
-                    : _asMap(json['tableStyle']))
-            : TableStyleData.defaults,
-      );
+  factory TableElement.fromJson(Map<String, dynamic> json) {
+    final rawTableData =
+        json.containsKey('tableData') ? json['tableData'] : json['table_data'];
+    final rawTableStyle = json.containsKey('tablestyle')
+        ? json['tablestyle']
+        : json['tableStyle'];
+    final tableStyleMap = _asMap(rawTableStyle);
+
+    return TableElement(
+      id: _asString(json['id']),
+      x: _asDouble(json['x']),
+      y: _asDouble(json['y']),
+      width: _asDouble(json['width']),
+      height: _asDouble(json['height']),
+      zIndex: _asInt(json['zIndex']),
+      locked: _asBool(json['locked']),
+      visible: _asBool(json['visible'], true),
+      tableData: TableData.fromJson(_asMap(rawTableData)),
+      tableStyle: rawTableStyle is Map
+          ? TableStyleData.fromJson(tableStyleMap)
+          : TableStyleData.defaults,
+    );
+  }
 }
 
 // ── Signature Block ──────────────────────────────────────────────────────────

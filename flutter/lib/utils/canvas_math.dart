@@ -90,46 +90,23 @@ class CanvasMath {
     final hGuides =
         guides.where((g) => !g.isVertical).map((g) => g.position).toList();
 
-    // Try snapping left edge, then center-x, then right edge
-    double snappedX = x;
-    double bestXDist = snapThreshold;
-    for (final g in vGuides) {
-      final dLeft = (x - g).abs();
-      final dCenter = (x + width / 2 - g).abs();
-      final dRight = (x + width - g).abs();
-      if (dLeft < bestXDist) {
-        bestXDist = dLeft;
-        snappedX = g;
-      }
-      if (dCenter < bestXDist) {
-        bestXDist = dCenter;
-        snappedX = g - width / 2;
-      }
-      if (dRight < bestXDist) {
-        bestXDist = dRight;
-        snappedX = g - width;
-      }
-    }
+    final snappedX = _nearestSnap([
+          for (final g in vGuides) ...[
+            (value: g, distance: (x - g).abs()),
+            (value: g - width / 2, distance: (x + width / 2 - g).abs()),
+            (value: g - width, distance: (x + width - g).abs()),
+          ],
+        ]) ??
+        x;
 
-    double snappedY = y;
-    double bestYDist = snapThreshold;
-    for (final g in hGuides) {
-      final dTop = (y - g).abs();
-      final dCenter = (y + height / 2 - g).abs();
-      final dBottom = (y + height - g).abs();
-      if (dTop < bestYDist) {
-        bestYDist = dTop;
-        snappedY = g;
-      }
-      if (dCenter < bestYDist) {
-        bestYDist = dCenter;
-        snappedY = g - height / 2;
-      }
-      if (dBottom < bestYDist) {
-        bestYDist = dBottom;
-        snappedY = g - height;
-      }
-    }
+    final snappedY = _nearestSnap([
+          for (final g in hGuides) ...[
+            (value: g, distance: (y - g).abs()),
+            (value: g - height / 2, distance: (y + height / 2 - g).abs()),
+            (value: g - height, distance: (y + height - g).abs()),
+          ],
+        ]) ??
+        y;
 
     return (snappedX, snappedY);
   }
@@ -181,7 +158,7 @@ class CanvasMath {
     double y = origY;
     double w = origWidth;
     double h = origHeight;
-    final aspect = origWidth / origHeight;
+    final aspect = origHeight == 0 ? 1.0 : origWidth / origHeight;
 
     switch (handle) {
       case HandlePosition.nw:
@@ -212,7 +189,8 @@ class CanvasMath {
         w = origWidth - dx;
     }
 
-    if (constrainAspect) {
+    var aspectWasConstrained = false;
+    if (constrainAspect && origWidth > 0 && origHeight > 0) {
       // Dominant axis drives the constrained axis.
       final wRatio = w / origWidth;
       final hRatio = h / origHeight;
@@ -221,10 +199,36 @@ class CanvasMath {
       } else {
         w = h * aspect;
       }
+      aspectWasConstrained = true;
     }
 
     // Enforce minimum size
-    if (w < minSize) {
+    if (aspectWasConstrained) {
+      if (w < minSize) {
+        w = minSize;
+        h = w / aspect;
+      }
+      if (h < minSize) {
+        h = minSize;
+        w = h * aspect;
+      }
+
+      if (_movesLeft(handle)) {
+        x = origX + origWidth - w;
+      } else if (!_movesRight(handle)) {
+        x = origX + (origWidth - w) / 2;
+      } else {
+        x = origX;
+      }
+
+      if (_movesTop(handle)) {
+        y = origY + origHeight - h;
+      } else if (!_movesBottom(handle)) {
+        y = origY + (origHeight - h) / 2;
+      } else {
+        y = origY;
+      }
+    } else if (w < minSize) {
       if (handle == HandlePosition.nw ||
           handle == HandlePosition.w ||
           handle == HandlePosition.sw) {
@@ -232,7 +236,7 @@ class CanvasMath {
       }
       w = minSize;
     }
-    if (h < minSize) {
+    if (!aspectWasConstrained && h < minSize) {
       if (handle == HandlePosition.nw ||
           handle == HandlePosition.n ||
           handle == HandlePosition.ne) {
@@ -271,12 +275,14 @@ class CanvasMath {
   // ── Alignment ────────────────────────────────────────────────────────────
 
   static List<TemplateElement> alignLeft(List<TemplateElement> elements) {
+    assert(elements.length >= 2, 'alignLeft requires at least two elements');
     if (elements.isEmpty) return elements;
     final minX = elements.map((e) => e.x).reduce((a, b) => a < b ? a : b);
     return _translateAll(elements, (e) => _setX(e, minX));
   }
 
   static List<TemplateElement> alignRight(List<TemplateElement> elements) {
+    assert(elements.length >= 2, 'alignRight requires at least two elements');
     if (elements.isEmpty) return elements;
     final maxRight = elements
         .map((e) => e.x + e.width)
@@ -285,12 +291,14 @@ class CanvasMath {
   }
 
   static List<TemplateElement> alignTop(List<TemplateElement> elements) {
+    assert(elements.length >= 2, 'alignTop requires at least two elements');
     if (elements.isEmpty) return elements;
     final minY = elements.map((e) => e.y).reduce((a, b) => a < b ? a : b);
     return _translateAll(elements, (e) => _setY(e, minY));
   }
 
   static List<TemplateElement> alignBottom(List<TemplateElement> elements) {
+    assert(elements.length >= 2, 'alignBottom requires at least two elements');
     if (elements.isEmpty) return elements;
     final maxBottom = elements
         .map((e) => e.y + e.height)
@@ -299,6 +307,7 @@ class CanvasMath {
   }
 
   static List<TemplateElement> alignCenterH(List<TemplateElement> elements) {
+    assert(elements.length >= 2, 'alignCenterH requires at least two elements');
     if (elements.isEmpty) return elements;
     final cx = elements.map((e) => e.x + e.width / 2).reduce((a, b) => a + b) /
         elements.length;
@@ -306,6 +315,7 @@ class CanvasMath {
   }
 
   static List<TemplateElement> alignCenterV(List<TemplateElement> elements) {
+    assert(elements.length >= 2, 'alignCenterV requires at least two elements');
     if (elements.isEmpty) return elements;
     final cy = elements.map((e) => e.y + e.height / 2).reduce((a, b) => a + b) /
         elements.length;
@@ -317,6 +327,42 @@ class CanvasMath {
   static (double, double, double, double) _normalise(
           double x, double y, double w, double h) =>
       (w < 0 ? x + w : x, h < 0 ? y + h : y, w.abs(), h.abs());
+
+  static double? _nearestSnap(
+    List<({double value, double distance})> candidates,
+  ) {
+    double? bestValue;
+    var bestDistance = snapThreshold;
+
+    for (final candidate in candidates) {
+      if (candidate.distance < bestDistance) {
+        bestDistance = candidate.distance;
+        bestValue = candidate.value;
+      }
+    }
+
+    return bestValue;
+  }
+
+  static bool _movesLeft(HandlePosition handle) =>
+      handle == HandlePosition.nw ||
+      handle == HandlePosition.w ||
+      handle == HandlePosition.sw;
+
+  static bool _movesRight(HandlePosition handle) =>
+      handle == HandlePosition.ne ||
+      handle == HandlePosition.e ||
+      handle == HandlePosition.se;
+
+  static bool _movesTop(HandlePosition handle) =>
+      handle == HandlePosition.nw ||
+      handle == HandlePosition.n ||
+      handle == HandlePosition.ne;
+
+  static bool _movesBottom(HandlePosition handle) =>
+      handle == HandlePosition.sw ||
+      handle == HandlePosition.s ||
+      handle == HandlePosition.se;
 
   static List<TemplateElement> _translateAll(
     List<TemplateElement> elements,
